@@ -1,0 +1,124 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: train-mlflow-candidate
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+    app.kubernetes.io/component: training
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: train
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  podGC:
+    strategy: OnWorkflowSuccess
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
+  arguments:
+    parameters:
+      - name: repository
+      - name: data-release-path
+      - name: release-id
+      - name: project-id
+      - name: git-sha
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        labels:
+          app.kubernetes.io/part-of: mlforge
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 2Gi
+  templates:
+    - name: train
+      dag:
+        tasks:
+          - name: prepare-versioned-data
+            template: prepare-versioned-data
+          - name: pytorch-train-and-register-candidate
+            dependencies: [prepare-versioned-data]
+            template: pytorch-train-and-register-candidate
+    - name: prepare-versioned-data
+      container:
+        image: mlforge/label-release:0.1.2
+        imagePullPolicy: IfNotPresent
+        command: [sh, -ec]
+        args:
+          - |
+            git clone --depth 1 --branch main \
+              "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPOSITORY}.git" /work/repository
+            cd /work/repository
+            dvc remote modify --local minio endpointurl "$DVC_ENDPOINT_URL"
+            dvc pull "$DATA_RELEASE_PATH"
+            test -f "${DATA_RELEASE_PATH%.dvc}/manifest.json"
+        env:
+          - name: REPOSITORY
+            value: "{{workflow.parameters.repository}}"
+          - name: DATA_RELEASE_PATH
+            value: "{{workflow.parameters.data-release-path}}"
+          - name: DVC_ENDPOINT_URL
+            value: http://minio.ml-platform.svc.cluster.local:9000
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: github-bot
+                key: token
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: root-user
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: root-password
+        resources:
+          requests: {cpu: 250m, memory: 512Mi}
+          limits: {cpu: "1", memory: 1536Mi}
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: pytorch-train-and-register-candidate
+      container:
+        image: mlforge/annotation-trainer:0.1.2
+        imagePullPolicy: IfNotPresent
+        command: [sh, -ec]
+        args:
+          - |
+            python -m mlforge_platform.train_annotation_baseline \
+              --release-dir "/work/repository/${DATA_RELEASE_PATH%.dvc}" \
+              --model-name "label-studio-project-{{workflow.parameters.project-id}}-annotation-baseline" \
+              --result-path /work/training-result.json \
+              --git-sha "{{workflow.parameters.git-sha}}"
+        env:
+          - name: DATA_RELEASE_PATH
+            value: "{{workflow.parameters.data-release-path}}"
+          - name: MLFLOW_TRACKING_URI
+            value: http://mlflow.ml-platform.svc.cluster.local:5000
+          - name: GIT_PYTHON_REFRESH
+            value: quiet
+          - name: MLFLOW_S3_ENDPOINT_URL
+            value: http://minio.ml-platform.svc.cluster.local:9000
+          - name: AWS_DEFAULT_REGION
+            value: us-east-1
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: minio-official-credentials
+                key: rootUser
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-official-credentials
+                key: rootPassword
+        resources:
+          requests: {cpu: 500m, memory: 1Gi}
+          limits: {cpu: "2", memory: 3Gi}
+        volumeMounts:
+          - name: work
+            mountPath: /work

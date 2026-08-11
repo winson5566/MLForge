@@ -11,11 +11,15 @@ in GitHub to require:
 
 1. one approving review;
 2. review from a code owner (see `.github/CODEOWNERS`);
-3. the `CML training / train-and-report` status check.
+3. the `CML data validation / validate-and-report` status check.
 
 Algorithm engineers review the PR's CML report: annotation count, empty or
 duplicate data, class distribution, and baseline comparison. Merge is the
-audited data-publication decision. Only the merge event starts full training.
+audited data-publication decision. A merge that changes exactly one
+`data/releases/project-*/<release-id>.dvc` pointer triggers the **Train MLflow
+Candidate** GitHub workflow. It submits the `train-mlflow-candidate` Argo
+WorkflowTemplate, which performs DVC data preparation, PyTorch training, and
+MLflow Candidate registration inside the workload cluster.
 
 For a team deployment, replace `@winson5566` in `CODEOWNERS` with an algorithm
 engineering team and use a GitHub App, not a personal access token, for the
