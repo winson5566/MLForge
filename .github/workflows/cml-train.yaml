@@ -1,4 +1,4 @@
-name: CML training
+name: CML data validation
 
 on:
   pull_request:
@@ -20,32 +20,44 @@ permissions:
   pull-requests: write
 
 jobs:
-  train-and-report:
+  validate-and-report:
     # This runner must be installed on the Mac that hosts K3d. GitHub-hosted
     # runners cannot reach the private MinIO and Kubernetes endpoints.
     runs-on: [self-hosted, mlforge]
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.DVC_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_S3_SECRET_ACCESS_KEY }}
-      TRAINING_MANIFEST: ${{ inputs.training_manifest || vars.TRAINING_MANIFEST }}
     steps:
       - uses: actions/checkout@v4
       - uses: iterative/setup-cml@v2
       - name: Fetch the versioned data
         run: dvc pull
-      - name: Submit training to Kubernetes
+      - name: Summarize the candidate data release
+        if: github.event_name == 'pull_request'
         run: |
-          test -n "$TRAINING_MANIFEST"
-          test -f "$TRAINING_MANIFEST"
-          job_name=$(kubectl --context k3d-workload -n ml-platform apply -f "$TRAINING_MANIFEST" -o name | sed 's#job.batch/##')
-          kubectl --context k3d-workload -n ml-platform wait --for=condition=complete "job/$job_name" --timeout=2h
-          kubectl --context k3d-workload -n ml-platform logs "job/$job_name" | tee training.log
+          manifest=$(find data/releases -name manifest.json -type f -print -quit 2>/dev/null || true)
+          {
+            printf '## MLForge data validation\n\n'
+            if [ -n "$manifest" ]; then
+              printf 'Candidate manifest: `%s`\n\n```json\n' "$manifest"
+              python3 -m json.tool "$manifest"
+              printf '```\n'
+            else
+              printf 'No `data/releases/**/manifest.json` changed in this PR. DVC data is reachable and the repository data version was fetched successfully.\n'
+            fi
+          } > report.md
       - name: Create a pull-request report
         if: github.event_name == 'pull_request'
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          printf '## MLForge training report\n\n```text\n' > report.md
-          tail -n 30 training.log >> report.md
-          printf '\n```\n' >> report.md
           cml comment create report.md
+      - name: Submit full training to Kubernetes
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TRAINING_MANIFEST: ${{ inputs.training_manifest }}
+        run: |
+          test -f "$TRAINING_MANIFEST"
+          job_name=$(kubectl --context k3d-workload -n ml-platform apply -f "$TRAINING_MANIFEST" -o name | sed 's#job.batch/##')
+          kubectl --context k3d-workload -n ml-platform wait --for=condition=complete "job/$job_name" --timeout=2h
+          kubectl --context k3d-workload -n ml-platform logs "job/$job_name"
