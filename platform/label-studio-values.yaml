@@ -1,0 +1,63 @@
+# Local single-node profile. PostgreSQL is shared by instance, but Label Studio
+# has its own database and database role.
+global:
+  pgConfig:
+    host: postgresql.ml-platform.svc.cluster.local
+    port: 5432
+    dbName: labelstudio
+    userName: labelstudio
+    password:
+      secretName: labelstudio-credentials
+      secretKey: password
+  extraEnvironmentVars:
+    SSRF_PROTECTION_ENABLED: "true"
+    DJANGO_DEBUG: "false"
+    # Local port-forward endpoint. Replace with the HTTPS ingress hostname when
+    # moving this values file to a shared environment.
+    LABEL_STUDIO_HOST: "http://localhost:8082"
+  persistence:
+    enabled: true
+    type: volume
+    config:
+      volume:
+        storageClass: local-path
+        size: 5Gi
+        accessModes:
+          - ReadWriteOnce
+postgresql:
+  enabled: false
+redis:
+  enabled: false
+app:
+  replicas: 1
+  deploymentStrategy:
+    type: Recreate
+  # Label Studio's first database initialization takes around a minute on this
+  # laptop, so retain a generous startup window.
+  startupProbe:
+    enabled: true
+    httpGet:
+      path: /health
+      port: 8000
+      scheme: HTTP
+    periodSeconds: 2
+    failureThreshold: 90
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      cpu: 750m
+      memory: 1Gi
+  nginx:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+rqworker:
+  # Enable this, then use a dedicated Redis and queue-specific worker replicas
+  # when asynchronous import/export workloads are introduced.
+  enabled: false

@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: voc2007-attach-remaining-predictions
+  namespace: ml-platform
+data:
+  attach.py: |
+    import base64, json, os
+    import xml.etree.ElementTree as ET
+    from urllib.parse import urlparse
+    from urllib.request import Request, urlopen
+    import boto3, psycopg2
+
+    BASE, PROJECT_ID = "http://label-studio-ls-app.ml-platform.svc.cluster.local", 1
+    def api(path, method="GET", payload=None, token=None, timeout=300):
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+        req = Request(BASE + path, data=None if payload is None else json.dumps(payload).encode(), headers=headers, method=method)
+        with urlopen(req, timeout=timeout) as response:
+            return json.load(response)
+
+    refresh = Request(BASE + "/api/token/refresh", data=json.dumps({"refresh": os.environ["LABEL_STUDIO_API_TOKEN"]}).encode(), headers={"Content-Type": "application/json"}, method="POST")
+    with urlopen(refresh, timeout=30) as response:
+        token = json.load(response)["access"]
+
+    db = psycopg2.connect(host="postgresql.ml-platform.svc.cluster.local", port=5432, dbname="labelstudio", user="labelstudio", password=os.environ["LABELSTUDIO_DB_PASSWORD"])
+    with db.cursor() as cursor:
+        cursor.execute("SELECT id, data, total_predictions FROM task WHERE project_id=%s", (PROJECT_ID,))
+        rows = cursor.fetchall()
+    by_filename = {}
+    for task_id, data, predictions in rows:
+        # S3 file-import tasks use $undefined$ internally; the one value is the source URI.
+        source_uri = next(iter(data.values()), "")
+        if source_uri:
+            by_filename[os.path.basename(urlparse(source_uri).path)] = (task_id, predictions)
+    if len(by_filename) != 5011:
+        raise RuntimeError(f"expected 5011 source tasks, found {len(by_filename)}")
+
+    s3 = boto3.client("s3", endpoint_url="http://minio.ml-platform.svc.cluster.local:9000", aws_access_key_id=os.environ["MINIO_ACCESS_KEY"], aws_secret_access_key=os.environ["MINIO_SECRET_KEY"], region_name="us-east-1")
+    batch, attached, skipped, continuation = [], 0, 0, None
+    while True:
+        args = {"Bucket": "cv-raw", "Prefix": "voc2007/Annotations/"}
+        if continuation: args["ContinuationToken"] = continuation
+        listing = s3.list_objects_v2(**args)
+        for item in listing.get("Contents", []):
+            if not item["Key"].endswith(".xml"): continue
+            root = ET.fromstring(s3.get_object(Bucket="cv-raw", Key=item["Key"])["Body"].read())
+            filename = root.findtext("filename")
+            task_id, prediction_count = by_filename[filename]
+            if prediction_count:
+                skipped += 1
+                continue
+            width, height = float(root.findtext("size/width")), float(root.findtext("size/height"))
+            result = []
+            for obj in root.findall("object"):
+                box = obj.find("bndbox")
+                xmin, ymin, xmax, ymax = (float(box.findtext(key)) for key in ("xmin", "ymin", "xmax", "ymax"))
+                result.append({"from_name":"label","to_name":"image","type":"rectanglelabels","original_width":width,"original_height":height,"image_rotation":0,"value":{"x":100*xmin/width,"y":100*ymin/height,"width":100*(xmax-xmin)/width,"height":100*(ymax-ymin)/height,"rotation":0,"rectanglelabels":[obj.findtext("name")]}})
+            batch.append({"task":task_id,"model_version":"VOC2007-ground-truth","score":1.0,"result":result})
+            if len(batch) == 100:
+                attached += api(f"/api/projects/{PROJECT_ID}/import/predictions", "POST", batch, token)["created"]
+                print(json.dumps({"attached": attached, "skipped": skipped}), flush=True)
+                batch = []
+        if not listing.get("IsTruncated"): break
+        continuation = listing["NextContinuationToken"]
+    if batch:
+        attached += api(f"/api/projects/{PROJECT_ID}/import/predictions", "POST", batch, token)["created"]
+    print(json.dumps({"attached": attached, "skipped": skipped, "total": attached + skipped}))
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: voc2007-attach-remaining-predictions
+  namespace: ml-platform
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: attach
+          image: mlforge/mlflow:3.15.1
+          command: ["python", "/scripts/attach.py"]
+          env:
+            - name: LABEL_STUDIO_API_TOKEN
+              valueFrom: {secretKeyRef: {name: labelstudio-api, key: token}}
+            - name: LABELSTUDIO_DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: labelstudio-credentials, key: password}}
+            - name: MINIO_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-credentials, key: root-user}}
+            - name: MINIO_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-credentials, key: root-password}}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "1", memory: 1536Mi}
+      volumes:
+        - name: scripts
+          configMap: {name: voc2007-attach-remaining-predictions}

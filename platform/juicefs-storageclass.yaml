@@ -1,0 +1,17 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: juicefs-rwx
+  labels:
+    app.kubernetes.io/part-of: mlforge
+provisioner: csi.juicefs.com
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+parameters:
+  csi.storage.k8s.io/provisioner-secret-name: juicefs-ce-credentials
+  csi.storage.k8s.io/provisioner-secret-namespace: ml-platform
+  csi.storage.k8s.io/node-publish-secret-name: juicefs-ce-credentials
+  csi.storage.k8s.io/node-publish-secret-namespace: ml-platform
+  csi.storage.k8s.io/controller-expand-secret-name: juicefs-ce-credentials
+  csi.storage.k8s.io/controller-expand-secret-namespace: ml-platform

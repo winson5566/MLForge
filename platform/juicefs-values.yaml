@@ -1,0 +1,35 @@
+# Local, single-node profile.  Production should run multiple controller replicas
+# and use an externally managed, highly available metadata database.
+mountMode: mountpod
+csidriver:
+  # Avoid Helm hook behaviour that can conflict with future Argo CD syncs.
+  disableHooks: true
+controller:
+  replicas: 1
+  provisioner: true
+  provisionWorkerThreads: 4
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+node:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+globalConfig:
+  manageByHelm: true
+  mountPodPatch:
+    - resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi

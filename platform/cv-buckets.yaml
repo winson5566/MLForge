@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cv-create-annotation-bucket
+  namespace: ml-platform
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mc
+          image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              mc alias set local http://minio.ml-platform.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+              mc mb --ignore-existing local/cv-annotations
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: {name: minio-credentials, key: root-user}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: minio-credentials, key: root-password}

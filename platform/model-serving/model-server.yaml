@@ -1,0 +1,64 @@
+# Project-level template. Render MODEL_URI to e.g.
+# models:/<registered-model>@champion before applying it through Argo CD.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cv-model-server
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: cv-model-server
+    app.kubernetes.io/component: model-serving
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cv-model-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cv-model-server
+    spec:
+      containers:
+        - name: server
+          image: mlforge/cv-model-server:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow.ml-platform.svc.cluster.local:5000
+            - name: MODEL_URI
+              value: models:/REPLACE_WITH_MODEL@champion
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 45
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cv-model-server
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: cv-model-server
+spec:
+  selector:
+    app.kubernetes.io/name: cv-model-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

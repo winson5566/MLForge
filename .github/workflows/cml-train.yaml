@@ -1,0 +1,51 @@
+name: CML training
+
+on:
+  pull_request:
+    paths:
+      - "data/**"
+      - "src/**"
+      - "platform/**"
+      - ".dvc/**"
+      - "dvc.yaml"
+  workflow_dispatch:
+    inputs:
+      training_manifest:
+        description: "Project Kubernetes Job manifest, for example projects/road-signs/training-job.yaml"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  train-and-report:
+    # This runner must be installed on the Mac that hosts K3d. GitHub-hosted
+    # runners cannot reach the private MinIO and Kubernetes endpoints.
+    runs-on: [self-hosted, mlforge]
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.DVC_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_S3_SECRET_ACCESS_KEY }}
+      TRAINING_MANIFEST: ${{ inputs.training_manifest || vars.TRAINING_MANIFEST }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: iterative/setup-cml@v2
+      - name: Fetch the versioned data
+        run: dvc pull
+      - name: Submit training to Kubernetes
+        run: |
+          test -n "$TRAINING_MANIFEST"
+          test -f "$TRAINING_MANIFEST"
+          job_name=$(kubectl --context k3d-workload -n ml-platform apply -f "$TRAINING_MANIFEST" -o name | sed 's#job.batch/##')
+          kubectl --context k3d-workload -n ml-platform wait --for=condition=complete "job/$job_name" --timeout=2h
+          kubectl --context k3d-workload -n ml-platform logs "job/$job_name" | tee training.log
+      - name: Create a pull-request report
+        if: github.event_name == 'pull_request'
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '## MLForge training report\n\n```text\n' > report.md
+          tail -n 30 training.log >> report.md
+          printf '\n```\n' >> report.md
+          cml comment create report.md

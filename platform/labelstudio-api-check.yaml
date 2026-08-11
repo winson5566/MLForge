@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: labelstudio-api-check
+  namespace: ml-platform
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: curlimages/curl:8.17.0
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              access_token="$(curl --fail-with-body --silent --show-error \
+                -X POST http://label-studio-ls-app.ml-platform.svc.cluster.local/api/token/refresh \
+                -H "Content-Type: application/json" \
+                -d "{\"refresh\":\"$LABEL_STUDIO_TOKEN\"}" | sed -n 's/.*"access":"\([^"]*\)".*/\1/p')"
+              test -n "$access_token"
+              curl --fail-with-body --silent --show-error \
+                -H "Authorization: Bearer $access_token" \
+                http://label-studio-ls-app.ml-platform.svc.cluster.local/api/current-user/whoami
+          env:
+            - name: LABEL_STUDIO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: labelstudio-api
+                  key: token

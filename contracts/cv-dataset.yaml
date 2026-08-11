@@ -1,0 +1,19 @@
+# Versioned CV dataset contract shared by Label Studio, DVC and training jobs.
+schema_version: v1
+task: object-detection # classification | object-detection | segmentation
+format:
+  images: coco
+  annotations: coco
+paths:
+  raw_images: data/raw/images
+  annotations: data/annotations/instances.json
+  training_manifest: data/processed/dataset.yaml
+lineage:
+  dvc_remote: minio
+  source_bucket: s3://cv-raw
+  annotation_bucket: s3://cv-annotations
+required_metadata:
+  - dataset_version
+  - label_schema_version
+  - label_studio_project_id
+  - git_sha

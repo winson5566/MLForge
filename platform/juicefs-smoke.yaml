@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: juicefs-smoke
+  namespace: ml-platform
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: juicefs-rwx
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: juicefs-smoke
+  namespace: ml-platform
+spec:
+  restartPolicy: Never
+  containers:
+    - name: writer
+      image: rancher/mirrored-library-busybox:1.37.0
+      command: ["/bin/sh", "-ec"]
+      args:
+        - |
+          date -u +%FT%TZ > /data/juicefs-smoke.txt
+          cat /data/juicefs-smoke.txt
+          sleep 300
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: juicefs-smoke

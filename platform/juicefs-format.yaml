@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: juicefs-format
+  namespace: ml-platform
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: format
+          image: juicedata/mount:ce-v1.4.1
+          command: ["juicefs", "format"]
+          args:
+            - "$(METAURL)"
+            - "$(FILESYSTEM_NAME)"
+            - --storage
+            - "$(STORAGE)"
+            - --bucket
+            - "$(BUCKET)"
+            - --access-key
+            - "$(ACCESS_KEY)"
+            - --secret-key
+            - "$(SECRET_KEY)"
+            - --no-update
+          env:
+            - name: METAURL
+              valueFrom:
+                secretKeyRef:
+                  name: juicefs-ce-credentials
+                  key: metaurl
+            - name: FILESYSTEM_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: juicefs-ce-credentials
+                  key: name
+            - name: STORAGE
+              valueFrom:
+                secretKeyRef:
+                  name: juicefs-ce-credentials
+                  key: storage
+            - name: BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: juicefs-ce-credentials
+                  key: bucket
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: juicefs-ce-credentials
+                  key: access-key
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: juicefs-ce-credentials
+                  key: secret-key

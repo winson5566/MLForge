@@ -1,0 +1,118 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: voc2007-labelstudio-bootstrap
+  namespace: ml-platform
+data:
+  bootstrap.py: |
+    import json
+    import os
+    from urllib.request import Request, urlopen
+
+    base = "http://label-studio-ls-app.ml-platform.svc.cluster.local"
+    pat = os.environ["LABEL_STUDIO_TOKEN"]
+
+    def call(path, payload=None, authenticated=True):
+        headers = {"Content-Type": "application/json"}
+        if authenticated:
+            headers["Authorization"] = f"Bearer {access_token}"
+        request = Request(
+            base + path,
+            data=None if payload is None else json.dumps(payload).encode(),
+            headers=headers,
+            method="GET" if payload is None else "POST",
+        )
+        with urlopen(request, timeout=120) as response:
+            return json.load(response)
+
+    refresh = Request(
+        base + "/api/token/refresh",
+        data=json.dumps({"refresh": pat}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(refresh, timeout=30) as response:
+        access_token = json.load(response)["access"]
+
+    labels = [
+        "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
+        "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike",
+        "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor",
+    ]
+    label_config = "<View><Image name='image' value='$image'/>" + \
+        "<RectangleLabels name='label' toName='image'>" + \
+        "".join(f"<Label value='{label}'/>" for label in labels) + \
+        "</RectangleLabels></View>"
+    project = call("/api/projects/", {
+        "title": "VOC2007 Object Detection",
+        "description": "PASCAL VOC 2007 training/validation image annotation project.",
+        "label_config": label_config,
+    })
+    project_id = project["id"]
+
+    common = {
+        "project": project_id,
+        "aws_access_key_id": os.environ["MINIO_ACCESS_KEY"],
+        "aws_secret_access_key": os.environ["MINIO_SECRET_KEY"],
+        "region_name": "us-east-1",
+        "s3_endpoint": "http://minio.ml-platform.svc.cluster.local:9000",
+    }
+    source = call("/api/storages/s3/", common | {
+        "title": "VOC2007 raw images",
+        "bucket": "cv-raw",
+        "prefix": "voc2007/JPEGImages",
+        "recursive_scan": True,
+        "regex_filter": ".*\\.jpg$",
+        "use_blob_urls": True,
+        "presign": True,
+        "presign_ttl": 60,
+    })
+    target = call("/api/storages/export/s3", common | {
+        "title": "VOC2007 annotation exports",
+        "bucket": "cv-annotations",
+        "prefix": "voc2007",
+        "can_delete_objects": False,
+    })
+    call(f"/api/storages/s3/{source['id']}/sync", {})
+    print(json.dumps({
+        "project_id": project_id,
+        "import_storage_id": source["id"],
+        "export_storage_id": target["id"],
+        "project_url": f"http://localhost:8082/projects/{project_id}",
+    }))
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: voc2007-labelstudio-bootstrap
+  namespace: ml-platform
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: mlforge/mlflow:3.15.1
+          command: ["python", "/config/bootstrap.py"]
+          env:
+            - name: LABEL_STUDIO_TOKEN
+              valueFrom:
+                secretKeyRef: {name: labelstudio-api, key: token}
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: minio-credentials, key: root-user}
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: minio-credentials, key: root-password}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 768Mi}
+      volumes:
+        - name: config
+          configMap: {name: voc2007-labelstudio-bootstrap}

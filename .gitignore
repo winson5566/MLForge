@@ -1,0 +1,17 @@
+.DS_Store
+
+# Local DVC credentials and cache
+.dvc/config.local
+.dvc/tmp/
+.dvc/cache/
+
+# Python build and virtual-environment artifacts
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local secrets
+*.pem
+*.key
+.env
+.env.*

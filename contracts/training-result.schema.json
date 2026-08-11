@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MLForge CV training result",
+  "type": "object",
+  "required": ["model_name", "run_id", "dataset_version", "metrics"],
+  "properties": {
+    "model_name": {"type": "string"},
+    "run_id": {"type": "string"},
+    "dataset_version": {"type": "string"},
+    "git_sha": {"type": "string"},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {"type": "number"}
+    }
+  }
+}
