@@ -11,5 +11,5 @@ real images from the immutable DVC data release to the deployed
 | Model provenance | `/health` must resolve `demo-champion` | Stop validation; repair alias/deployment mismatch. |
 
 The generous latency budget is intentionally scoped to CPU-only Apple Silicon
-local validation. A production GPU policy must be a separately versioned file
-with realistic traffic, error, latency, saturation, and drift thresholds.
+local validation. Production GPU deployment needs a separately versioned
+policy with realistic traffic, error, latency, and saturation thresholds.
