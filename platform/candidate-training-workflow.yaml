@@ -85,21 +85,25 @@ spec:
             mountPath: /work
     - name: pytorch-train-and-register-candidate
       container:
-        image: mlforge/annotation-trainer:0.1.2
+        image: mlforge/yolo-trainer:0.1.2
         imagePullPolicy: IfNotPresent
         command: [sh, -ec]
         args:
           - |
-            python -m mlforge_platform.train_annotation_baseline \
+            python -m mlforge_platform.train_yolo_detector \
               --release-dir "/work/repository/${DATA_RELEASE_PATH%.dvc}" \
-              --model-name "label-studio-project-{{workflow.parameters.project-id}}-annotation-baseline" \
+              --model-name "label-studio-project-{{workflow.parameters.project-id}}-yolo-detector" \
               --result-path /work/training-result.json \
-              --git-sha "{{workflow.parameters.git-sha}}"
+              --git-sha "{{workflow.parameters.git-sha}}" \
+              --epochs 3 \
+              --imgsz 320
         env:
           - name: DATA_RELEASE_PATH
             value: "{{workflow.parameters.data-release-path}}"
           - name: MLFLOW_TRACKING_URI
             value: http://mlflow.ml-platform.svc.cluster.local:5000
+          - name: S3_ENDPOINT_URL
+            value: http://minio.ml-platform.svc.cluster.local:9000
           - name: GIT_PYTHON_REFRESH
             value: quiet
           - name: MLFLOW_S3_ENDPOINT_URL

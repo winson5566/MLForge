@@ -11,8 +11,13 @@ on:
         description: "Candidate version to promote"
         required: true
         type: string
-      minimum_accuracy:
-        description: "Minimum validation_accuracy required for Champion"
+      metric_name:
+        description: "MLflow metric required for Champion, for example validation_map50"
+        required: true
+        default: "validation_map50"
+        type: string
+      minimum_metric:
+        description: "Minimum value of the selected metric required for Champion"
         required: true
         default: "0.70"
         type: string
@@ -33,7 +38,8 @@ jobs:
         env:
           MODEL_NAME: ${{ inputs.model_name }}
           MODEL_VERSION: ${{ inputs.model_version }}
-          MINIMUM: ${{ inputs.minimum_accuracy }}
+          METRIC_NAME: ${{ inputs.metric_name }}
+          MINIMUM: ${{ inputs.minimum_metric }}
         run: |
           workflow=$(cat <<EOF | kubectl --context k3d-workload -n ml-platform create -f - -o name
           apiVersion: argoproj.io/v1alpha1
@@ -52,6 +58,8 @@ jobs:
                   value: $MODEL_NAME
                 - name: model-version
                   value: "$MODEL_VERSION"
+                - name: metric-name
+                  value: $METRIC_NAME
                 - name: minimum
                   value: "$MINIMUM"
           EOF
