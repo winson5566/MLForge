@@ -1,0 +1,22 @@
+# This is submitted by the GitHub Actions “Create data release” button.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: label-release-manual-
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+    mlforge.ai/trigger: algorithm-engineer
+spec:
+  workflowTemplateRef:
+    name: label-release
+  arguments:
+    parameters:
+      - name: project-id
+        value: "1"
+      - name: event-id
+        value: manual-github-dispatch
+      - name: repository
+        value: winson5566/MLForge
+      - name: dry-run
+        value: "false"

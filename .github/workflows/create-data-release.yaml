@@ -1,0 +1,34 @@
+name: Create data release
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: Label Studio project ID
+        required: true
+        default: "1"
+        type: string
+      dry_run:
+        description: Validate and transform only; do not push DVC data or open a PR
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  create-data-release:
+    runs-on: [self-hosted, mlforge]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Submit the approved data-release request
+        env:
+          PROJECT_ID: ${{ inputs.project_id }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          request_file="$(mktemp)"
+          cp platform/label-release-request.yaml "$request_file"
+          sed -i.bak "s/value: \"1\"/value: \"$PROJECT_ID\"/" "$request_file"
+          sed -i.bak "s/value: \"false\"/value: \"$DRY_RUN\"/" "$request_file"
+          kubectl --context k3d-workload -n ml-platform create -f "$request_file"

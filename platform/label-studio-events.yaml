@@ -1,0 +1,71 @@
+# The local EventBus is intentionally single-replica. Production should use
+# three replicas and durable storage across failure domains.
+apiVersion: argoproj.io/v1alpha1
+kind: EventBus
+metadata:
+  name: default
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+spec:
+  jetstream:
+    version: 2.10.10
+    replicas: 1
+    # Must match the single JetStream replica in this laptop profile. Set this
+    # and `replicas` to 3 in a production, multi-node EventBus.
+    streamConfig: |
+      replicas: 1
+    persistence:
+      storageClassName: local-path
+      accessMode: ReadWriteOnce
+      volumeSize: 1Gi
+    containerTemplate:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 250m
+          memory: 384Mi
+    reloaderContainerTemplate:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 96Mi
+    metricsContainerTemplate:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 96Mi
+---
+# This endpoint is ClusterIP-only. Label Studio sends a short, authenticated
+# request and the EventSource immediately hands it to JetStream; it never runs
+# data export or training in the webhook request path.
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata:
+  name: label-studio-events
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+spec:
+  eventBusName: default
+  service:
+    ports:
+      - name: webhook
+        port: 12000
+        targetPort: 12000
+  webhook:
+    label-studio-review:
+      port: "12000"
+      endpoint: /label-studio/review
+      method: POST
+      authSecret:
+        name: label-studio-webhook
+        key: token

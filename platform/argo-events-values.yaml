@@ -1,0 +1,19 @@
+# Local profile: one controller, while EventBus/EventSource/Sensor objects remain
+# isolated in the ml-platform namespace.
+controller:
+  replicas: 1
+  rbac:
+    enabled: true
+    namespaced: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Admission validation is valuable in shared production clusters. It is disabled
+# here to keep the single-node laptop profile small; manifests are validated in CI.
+webhook:
+  enabled: false

@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: label-release-dry-run-smoke
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+spec:
+  workflowTemplateRef:
+    name: label-release
+  arguments:
+    parameters:
+      - name: project-id
+        value: "1"
+      - name: event-id
+        value: dry-run-smoke
+      - name: repository
+        value: winson5566/MLForge
+      - name: dry-run
+        value: "true"

@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: label-studio-eventsource-smoke
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: curlimages/curl:8.17.0
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              endpoint="http://label-studio-events-eventsource-svc.ml-platform.svc.cluster.local:12000/label-studio/review"
+              unauth_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+                --request POST --data '{"action":"REVIEW_UPDATED"}' "$endpoint")"
+              test "$unauth_status" = "401"
+
+              auth_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+                --request POST \
+                --header "Authorization: Bearer $WEBHOOK_TOKEN" \
+                --header 'Content-Type: application/json' \
+                --data '{"action":"REVIEW_UPDATED","project":{"id":1},"smoke_test":true}' \
+                "$endpoint")"
+              case "$auth_status" in 2*) ;; *) exit 1 ;; esac
+              echo "Webhook authentication and EventSource handoff verified ($auth_status)"
+          env:
+            - name: WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: label-studio-webhook
+                  key: token
