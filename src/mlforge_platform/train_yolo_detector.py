@@ -114,7 +114,9 @@ def main() -> None:
     manifest = json.loads((args.release_dir / "manifest.json").read_text())
     dataset_dir = args.result_path.parent / "yolo-dataset"
     dataset_path, classes = prepare_dataset(args.release_dir, dataset_dir)
-    model = YOLO("yolo11n.yaml")
+    # Use COCO-pretrained weights for transfer learning. A `.yaml` file only
+    # defines the network and would train from random initialization.
+    model = YOLO("yolo11n.pt")
     run_dir = args.result_path.parent / "yolo-runs" / manifest["release_id"]
     model.train(
         data=str(dataset_path), epochs=args.epochs, imgsz=args.imgsz, batch=2,
