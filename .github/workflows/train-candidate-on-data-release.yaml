@@ -1,0 +1,87 @@
+name: Train MLflow Candidate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "data/releases/**"
+  workflow_dispatch:
+    inputs:
+      data_release_path:
+        description: "DVC pointer path, for example data/releases/project-1/<release-id>.dvc"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  submit-argo-training:
+    runs-on: [self-hosted, mlforge]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Select the published data release
+        id: release
+        env:
+          DISPATCH_PATH: ${{ inputs.data_release_path }}
+        run: |
+          if [ -n "$DISPATCH_PATH" ]; then
+            path="$DISPATCH_PATH"
+          else
+            paths=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" \
+              | grep -E '^data/releases/project-[0-9]+/.+\.dvc$' || true)
+            count=$(printf '%s\n' "$paths" | sed '/^$/d' | wc -l | tr -d ' ')
+            test "$count" = 1
+            path="$paths"
+          fi
+          test -n "$path"
+          project_id=$(printf '%s' "$path" | sed -E 's#^data/releases/project-([0-9]+)/.*#\1#')
+          release_id=$(basename "$path" .dvc)
+          printf 'path=%s\nproject_id=%s\nrelease_id=%s\n' "$path" "$project_id" "$release_id" >> "$GITHUB_OUTPUT"
+      - name: Submit Argo training workflow
+        id: argo
+        env:
+          DATA_RELEASE_PATH: ${{ steps.release.outputs.path }}
+          PROJECT_ID: ${{ steps.release.outputs.project_id }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+        run: |
+          workflow=$(cat <<EOF | kubectl --context k3d-workload -n ml-platform create -f - -o name
+          apiVersion: argoproj.io/v1alpha1
+          kind: Workflow
+          metadata:
+            generateName: train-candidate-
+            labels:
+              app.kubernetes.io/part-of: mlforge
+              mlforge.ai/trigger: data-release-merge
+          spec:
+            workflowTemplateRef:
+              name: train-mlflow-candidate
+            arguments:
+              parameters:
+                - name: repository
+                  value: ${{ github.repository }}
+                - name: data-release-path
+                  value: $DATA_RELEASE_PATH
+                - name: release-id
+                  value: $RELEASE_ID
+                - name: project-id
+                  value: "$PROJECT_ID"
+                - name: git-sha
+                  value: ${{ github.sha }}
+          EOF
+          )
+          printf 'workflow=%s\n' "$workflow" >> "$GITHUB_OUTPUT"
+      - name: Publish submission summary
+        env:
+          WORKFLOW: ${{ steps.argo.outputs.workflow }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+        run: |
+          {
+            echo '## MLflow Candidate training submitted'
+            echo
+            echo "- Data release: \`$RELEASE_ID\`"
+            echo "- Argo workflow: \`$WORKFLOW\`"
+            echo '- Follow the Argo workflow; successful completion registers the `candidate` model alias in MLflow.'
+          } >> "$GITHUB_STEP_SUMMARY"
