@@ -33,12 +33,25 @@ def main() -> None:
             f"quality gate rejected: {args.metric_name}={metric_value} < {args.minimum}"
         )
 
+    previous_alias = f"{args.alias}-previous"
+    previous_version = None
+    try:
+        previous = client.get_model_version_by_alias(args.model_name, args.alias)
+        if str(previous.version) != str(args.version):
+            previous_version = str(previous.version)
+            client.set_registered_model_alias(args.model_name, previous_alias, previous.version)
+    except Exception:
+        # First promotion has no predecessor. A later automatic rollback will
+        # fail closed rather than removing the active alias.
+        pass
     client.set_registered_model_alias(args.model_name, args.alias, args.version)
     print(json.dumps({
         "model_name": args.model_name,
         "version": str(args.version),
         "source_alias": "candidate",
         "target_alias": args.alias,
+        "previous_alias": previous_alias,
+        "previous_version": previous_version,
         "metric_name": args.metric_name,
         "metric_value": metric_value,
         "minimum": args.minimum,

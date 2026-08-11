@@ -17,12 +17,16 @@ from typing import Any
 import mlflow
 from fastapi import FastAPI, HTTPException
 from PIL import Image
-from prometheus_client import Counter, Histogram, make_asgi_app
+from prometheus_client import Counter, Histogram, Info, make_asgi_app
 from pydantic import BaseModel, Field
 from ultralytics import YOLO
 
 REQUESTS = Counter("mlforge_yolo_canary_requests_total", "YOLO Canary requests", ["status"])
 LATENCY = Histogram("mlforge_yolo_canary_latency_seconds", "YOLO Canary request latency")
+DETECTIONS = Counter("mlforge_yolo_canary_detections_total", "YOLO detections", ["class_name"])
+EMPTY = Counter("mlforge_yolo_canary_empty_predictions_total", "YOLO requests with no detections")
+CONFIDENCE = Histogram("mlforge_yolo_canary_detection_confidence", "YOLO detection confidence", buckets=(0.1, 0.25, 0.5, 0.75, 0.9, 1.0))
+MODEL_INFO = Info("mlforge_yolo_canary_model", "Loaded YOLO model")
 MODEL: YOLO | None = None
 MODEL_VERSION = ""
 
@@ -46,6 +50,7 @@ async def lifespan(_: FastAPI):
     )
     MODEL = YOLO(weights)
     MODEL_VERSION = str(version.version)
+    MODEL_INFO.info({"name": model_name, "alias": model_alias, "version": MODEL_VERSION})
     yield
 
 
@@ -84,6 +89,12 @@ def predict(request: PredictionRequest) -> dict[str, Any]:
             }
             for box in result.boxes
         ]
+        if detections:
+            for detection in detections:
+                DETECTIONS.labels(class_name=detection["class_name"]).inc()
+                CONFIDENCE.observe(detection["confidence"])
+        else:
+            EMPTY.inc()
         REQUESTS.labels(status="success").inc()
         return {"detections": detections, "model_version": MODEL_VERSION}
     except Exception as exc:
