@@ -1,0 +1,60 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: monitor-yolo-local-predictions
+  namespace: ml-platform
+spec:
+  schedules: ["*/15 * * * *"]
+  concurrencyPolicy: Forbid
+  workflowSpec:
+    serviceAccountName: argo-workflow
+    entrypoint: monitor
+    onExit: create-labeling-demand-on-drift
+    volumeClaimTemplates:
+      - metadata: {name: work}
+        spec:
+          accessModes: [ReadWriteOnce]
+          storageClassName: local-path
+          resources: {requests: {storage: 1Gi}}
+    templates:
+      - name: monitor
+        container:
+          image: mlforge/canary-gate:0.1.2
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, mlforge_platform.prediction_drift_monitor]
+          args: [--baseline-path, /baseline/baseline.json, --result-path, /work/drift.json]
+          env:
+            - {name: PROMETHEUS_URL, value: http://prometheus.monitoring.svc.cluster.local:9090}
+            - {name: MLFLOW_TRACKING_URI, value: http://mlflow.ml-platform.svc.cluster.local:5000}
+          volumeMounts:
+            - {name: work, mountPath: /work}
+            - {name: baseline, mountPath: /baseline, readOnly: true}
+      - name: create-labeling-demand-on-drift
+        steps:
+          - - name: create-request
+              template: create-request
+              when: "{{workflow.status}} != Succeeded"
+      - name: create-request
+        container:
+          image: rancher/kubectl:v1.35.0
+          command: [kubectl]
+          args:
+            - -n
+            - ml-platform
+            - create
+            - configmap
+            - labeling-demand
+            - --from-literal=status=needs-labeling
+            - --from-literal=source=prediction-drift
+    volumes:
+      - name: baseline
+        configMap: {name: yolo-local-training-baseline}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yolo-local-training-baseline
+  namespace: ml-platform
+data:
+  baseline.json: |
+    {"release_id":"febcf81e6dd06fd8","class_counts":{"person":13,"chair":6,"aeroplane":5,"car":4,"bicycle":4,"cat":3,"horse":2,"motorbike":2,"dog":1,"tvmonitor":1,"bird":1}}
