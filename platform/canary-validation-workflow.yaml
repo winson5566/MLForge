@@ -9,7 +9,6 @@ metadata:
 spec:
   serviceAccountName: argo-workflow
   entrypoint: validate
-  onExit: rollback-on-failed-validation
   ttlStrategy:
     secondsAfterCompletion: 86400
   podGC:
@@ -28,10 +27,6 @@ spec:
         value: "1.0"
       - name: maximum-p95-seconds
         value: "10.0"
-      - name: model-name
-        value: label-studio-project-1-yolo-detector
-      - name: model-alias
-        value: demo-champion
   volumeClaimTemplates:
     - metadata:
         name: work
@@ -111,24 +106,3 @@ spec:
           requests: {cpu: 500m, memory: 1Gi}
           limits: {cpu: "2", memory: 3Gi}
         volumeMounts: [{name: work, mountPath: /work}]
-    - name: rollback-on-failed-validation
-      steps:
-        - - name: restore-previous-alias
-            template: restore-previous-alias
-            when: "{{workflow.status}} != Succeeded"
-        - - name: restart-local-canary
-            template: restart-local-canary
-            when: "{{workflow.status}} != Succeeded"
-    - name: restore-previous-alias
-      container:
-        image: mlforge/canary-gate:0.1.2
-        imagePullPolicy: IfNotPresent
-        command: [python, -m, mlforge_platform.rollback_alias]
-        args: [--model-name, "{{workflow.parameters.model-name}}", --alias, "{{workflow.parameters.model-alias}}"]
-        env:
-          - name: MLFLOW_TRACKING_URI
-            value: http://mlflow.ml-platform.svc.cluster.local:5000
-    - name: restart-local-canary
-      container:
-        image: rancher/kubectl:v1.35.0
-        command: [kubectl, -n, ml-platform, rollout, restart, deployment/yolo-local-canary]

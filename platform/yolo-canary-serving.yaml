@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
         - name: server
-          image: mlforge/yolo-canary-server:0.1.2
+          image: mlforge/yolo-canary-server:0.2.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
