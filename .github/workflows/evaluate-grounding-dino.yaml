@@ -1,0 +1,42 @@
+name: Evaluate Grounding DINO
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_release_path:
+        description: "DVC pointer path for the immutable data release"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  submit-evaluation:
+    runs-on: [self-hosted, mlforge]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Submit zero-shot evaluation to Argo
+        env:
+          DATA_RELEASE_PATH: ${{ inputs.data_release_path }}
+        run: |
+          cat <<EOF | kubectl --context k3d-workload -n ml-platform create -f -
+          apiVersion: argoproj.io/v1alpha1
+          kind: Workflow
+          metadata:
+            generateName: evaluate-grounding-dino-
+            labels:
+              app.kubernetes.io/part-of: mlforge
+              mlforge.ai/trigger: manual-grounding-dino-evaluation
+          spec:
+            workflowTemplateRef:
+              name: evaluate-grounding-dino
+            arguments:
+              parameters:
+                - name: repository
+                  value: ${{ github.repository }}
+                - name: data-release-path
+                  value: $DATA_RELEASE_PATH
+                - name: git-sha
+                  value: ${{ github.sha }}
+          EOF
