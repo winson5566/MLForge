@@ -1,0 +1,28 @@
+controller:
+  workflowNamespaces:
+    - ml-platform
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+# Workflows run only in ml-platform and use this least-privilege service account.
+workflow:
+  serviceAccount:
+    create: true
+    name: argo-workflow
+
+server:
+  secure: false
+  authModes:
+    - server
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 384Mi

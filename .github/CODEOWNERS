@@ -1,0 +1,5 @@
+# Data-version PRs require the listed algorithm owner when GitHub branch
+# protection enables “Require review from Code Owners”. Replace with your team
+# after the exercise moves beyond a single maintainer.
+/data/releases/ @winson5566
+/data/**/*.dvc @winson5566

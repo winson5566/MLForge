@@ -1,0 +1,292 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: label-release-sensor
+  namespace: ml-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: label-release-sensor
+  namespace: ml-platform
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [workflows]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: label-release-sensor
+  namespace: ml-platform
+subjects:
+  - kind: ServiceAccount
+    name: label-release-sensor
+    namespace: ml-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: label-release-sensor
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: label-release-status-writer
+  namespace: ml-platform
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: label-release-status-writer
+  namespace: ml-platform
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow
+    namespace: ml-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: label-release-status-writer
+---
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: label-release-status
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: record
+  podGC:
+    strategy: OnWorkflowSuccess
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+  synchronization:
+    mutexes:
+      - name: label-release-status-project-1
+  arguments:
+    parameters:
+      - name: project-id
+        value: "1"
+      - name: event-id
+        value: manual
+  templates:
+    - name: record
+      container:
+        image: mlforge/label-release:0.1.2
+        command: [python, -m, mlforge_platform.pending_release]
+        args:
+          - --project-id
+          - "{{workflow.parameters.project-id}}"
+          - --event-id
+          - "{{workflow.parameters.event-id}}"
+        env:
+          - name: LABEL_STUDIO_URL
+            value: http://label-studio-ls-app.ml-platform.svc.cluster.local
+          - name: LABEL_STUDIO_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: labelstudio-api
+                key: token
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: 250m, memory: 384Mi}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: label-release
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: release
+  podGC:
+    strategy: OnWorkflowSuccess
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
+  synchronization:
+    mutexes:
+      - name: label-release-project-1
+  arguments:
+    parameters:
+      - name: project-id
+        value: "1"
+      - name: event-id
+        value: manual
+      - name: repository
+        value: winson5566/MLForge
+      - name: dry-run
+        value: "false"
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        labels:
+          app.kubernetes.io/part-of: mlforge
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 2Gi
+  templates:
+    - name: release
+      dag:
+        tasks:
+          - name: export
+            template: export
+          - name: validate-transform
+            dependencies: [export]
+            template: validate-transform
+          - name: dvc-push-and-pr
+            dependencies: [validate-transform]
+            when: "{{workflow.parameters.dry-run}} == false"
+            template: dvc-push-and-pr
+            arguments:
+              parameters:
+                - name: release-id
+                  value: "{{tasks.validate-transform.outputs.parameters.release-id}}"
+    - name: export
+      container:
+        image: mlforge/label-release:0.1.2
+        command: [python, -m, mlforge_platform.labelstudio_export]
+        args:
+          - --project-id
+          - "{{workflow.parameters.project-id}}"
+          - --output
+          - /work/label-studio-export.json
+        env:
+          - name: LABEL_STUDIO_URL
+            value: http://label-studio-ls-app.ml-platform.svc.cluster.local
+          - name: LABEL_STUDIO_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: labelstudio-api
+                key: token
+        volumeMounts:
+          - name: work
+            mountPath: /work
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: 500m, memory: 768Mi}
+    - name: validate-transform
+      outputs:
+        parameters:
+          - name: release-id
+            valueFrom:
+              path: /work/release-id
+      container:
+        image: mlforge/label-release:0.1.2
+        command: [python, -m, mlforge_platform.release_transform]
+        args:
+          - --project-id
+          - "{{workflow.parameters.project-id}}"
+          - --input
+          - /work/label-studio-export.json
+          - --output-root
+          - /work/releases
+          - --release-id-output
+          - /work/release-id
+        volumeMounts:
+          - name: work
+            mountPath: /work
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: 500m, memory: 768Mi}
+    - name: dvc-push-and-pr
+      inputs:
+        parameters:
+          - name: release-id
+      container:
+        image: mlforge/label-release:0.1.2
+        command: [python, -m, mlforge_platform.release_publish]
+        args:
+          - --project-id
+          - "{{workflow.parameters.project-id}}"
+          - --release-id
+          - "{{inputs.parameters.release-id}}"
+          - --release-root
+          - /work/releases
+          - --repository
+          - "{{workflow.parameters.repository}}"
+        env:
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: root-user
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: root-password
+          - name: DVC_ENDPOINT_URL
+            value: http://minio.ml-platform.svc.cluster.local:9000
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: github-bot
+                key: token
+        volumeMounts:
+          - name: work
+            mountPath: /work
+        resources:
+          requests: {cpu: 250m, memory: 512Mi}
+          limits: {cpu: "1", memory: 1536Mi}
+---
+# Label Studio events only refresh pending-release state. An algorithm engineer
+# explicitly invokes the separate `label-release` template from GitHub Actions.
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: label-release
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+spec:
+  template:
+    serviceAccountName: label-release-sensor
+  dependencies:
+    - name: label-studio-change
+      eventSourceName: label-studio-events
+      eventName: label-studio-review
+  triggers:
+    - template:
+        name: record-pending-label-change
+        k8s:
+          operation: create
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: label-release-status-
+                namespace: ml-platform
+                labels:
+                  app.kubernetes.io/part-of: mlforge
+              spec:
+                workflowTemplateRef:
+                  name: label-release-status
+                arguments:
+                  parameters:
+                    - name: project-id
+                      value: "1"
+                    - name: event-id
+                      value: pending
+          parameters:
+            - src:
+                dependencyName: label-studio-change
+                contextKey: id
+              dest: spec.arguments.parameters.1.value

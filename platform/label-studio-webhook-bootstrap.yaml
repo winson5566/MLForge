@@ -1,0 +1,88 @@
+# Idempotently configures project 1's outbound webhook. This is a short-lived
+# bootstrap job, not the event-processing path.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: label-studio-webhook-bootstrap
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: configure
+          image: python:3.12-alpine
+          command: [python, -c]
+          args:
+            - |
+              import json
+              import os
+              from urllib.request import Request, urlopen
+
+              base = "http://label-studio-ls-app.ml-platform.svc.cluster.local"
+              project = 1
+              target = "http://label-studio-events-eventsource-svc.ml-platform.svc.cluster.local:12000/label-studio/review"
+
+              def call(path, method="GET", payload=None):
+                  headers = {"Authorization": f"Bearer {access}"}
+                  data = None
+                  if payload is not None:
+                      headers["Content-Type"] = "application/json"
+                      data = json.dumps(payload).encode()
+                  request = Request(base + path, data=data, headers=headers, method=method)
+                  with urlopen(request, timeout=10) as response:
+                      return json.loads(response.read().decode() or "{}")
+
+              refresh_request = Request(
+                  base + "/api/token/refresh",
+                  data=json.dumps({"refresh": os.environ["LABEL_STUDIO_TOKEN"]}).encode(),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urlopen(refresh_request, timeout=10) as response:
+                  access = json.loads(response.read().decode())["access"]
+
+              available = call("/api/webhooks/info/")
+              review_actions = [a for a in ("REVIEW_CREATED", "REVIEW_UPDATED") if a in available]
+              actions = review_actions or ["ANNOTATION_CREATED", "ANNOTATION_UPDATED"]
+              mode = "review" if review_actions else "annotation-update fallback"
+              desired = {
+                  "url": target,
+                  "project": project,
+                  "actions": actions,
+                  "headers": {"Authorization": f"Bearer {os.environ['WEBHOOK_TOKEN']}"},
+                  "is_active": True,
+                  "send_for_all_actions": False,
+                  "send_payload": True,
+              }
+              existing = call(f"/api/webhooks/?project={project}")
+              match = next((item for item in existing if item.get("url") == target), None)
+              if match:
+                  call(f"/api/webhooks/{match['id']}/", "PATCH", desired)
+                  outcome = "updated"
+              else:
+                  call("/api/webhooks/", "POST", desired)
+                  outcome = "created"
+              print(f"{outcome} Label Studio webhook for project {project}; mode={mode}; actions={','.join(actions)}")
+          env:
+            - name: LABEL_STUDIO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: labelstudio-api
+                  key: token
+            - name: WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: label-studio-webhook
+                  key: token
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

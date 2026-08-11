@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: argo-smoke
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+spec:
+  entrypoint: verify
+  serviceAccountName: argo-workflow
+  podGC:
+    strategy: OnWorkflowSuccess
+  ttlStrategy:
+    secondsAfterCompletion: 600
+  templates:
+    - name: verify
+      container:
+        image: alpine:3.20
+        command: [sh, -c]
+        args: ["echo 'Argo Workflows is ready'"]
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
