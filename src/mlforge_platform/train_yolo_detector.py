@@ -107,8 +107,9 @@ def main() -> None:
     parser.add_argument("--model-name", required=True)
     parser.add_argument("--result-path", required=True, type=Path)
     parser.add_argument("--git-sha", required=True)
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--imgsz", type=int, default=320)
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--patience", type=int, default=10)
     args = parser.parse_args()
 
     manifest = json.loads((args.release_dir / "manifest.json").read_text())
@@ -119,11 +120,11 @@ def main() -> None:
     model = YOLO("yolo11n.pt")
     run_dir = args.result_path.parent / "yolo-runs" / manifest["release_id"]
     model.train(
-        data=str(dataset_path), epochs=args.epochs, imgsz=args.imgsz, batch=2,
+        data=str(dataset_path), epochs=args.epochs, imgsz=args.imgsz, batch=1,
         device="cpu", workers=0, project=str(args.result_path.parent / "yolo-runs"),
-        name=manifest["release_id"], exist_ok=True, verbose=False,
+        name=manifest["release_id"], patience=args.patience, exist_ok=True, verbose=False,
     )
-    metrics = model.val(data=str(dataset_path), imgsz=args.imgsz, batch=2, device="cpu", workers=0, verbose=False)
+    metrics = model.val(data=str(dataset_path), imgsz=args.imgsz, batch=1, device="cpu", workers=0, verbose=False)
     map50 = float(metrics.box.map50)
     map5095 = float(metrics.box.map)
     best_weights = run_dir / "weights" / "best.pt"
@@ -136,7 +137,7 @@ def main() -> None:
             "git_sha": args.git_sha,
             "training_kind": "yolo11n-object-detection",
         })
-        mlflow.log_params({"epochs": args.epochs, "imgsz": args.imgsz, "class_count": len(classes)})
+        mlflow.log_params({"epochs": args.epochs, "imgsz": args.imgsz, "patience": args.patience, "batch": 1, "class_count": len(classes)})
         mlflow.log_metrics({"validation_map50": map50, "validation_map50_95": map5095})
         mlflow.log_artifact(str(dataset_path), artifact_path="dataset")
         mlflow.log_artifact(str(best_weights), artifact_path="weights")
