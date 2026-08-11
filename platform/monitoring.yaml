@@ -21,6 +21,11 @@ data:
         static_configs:
           - targets:
               - juicefs-csi-node.kube-system.svc.cluster.local:9567
+      - job_name: yolo-local-canary
+        metrics_path: /metrics/
+        static_configs:
+          - targets:
+              - yolo-local-canary.ml-platform.svc.cluster.local:8080
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -40,6 +45,11 @@ metadata:
   name: prometheus
   namespace: monitoring
 spec:
+  # Prometheus has a single-writer TSDB on this local RWO volume. Recreate
+  # prevents a rolling-update surge from starting two writers and hitting the
+  # WAL lock during configuration changes.
+  strategy:
+    type: Recreate
   replicas: 1
   selector:
     matchLabels: {app: prometheus}

@@ -1,0 +1,108 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: validate-yolo-local-canary
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+    app.kubernetes.io/component: model-serving
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: validate
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  podGC:
+    strategy: OnWorkflowSuccess
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
+  arguments:
+    parameters:
+      - name: repository
+      - name: data-release-path
+      - name: endpoint
+        value: http://yolo-local-canary.ml-platform.svc.cluster.local:8080
+      - name: requests
+        value: "8"
+      - name: minimum-success-rate
+        value: "1.0"
+      - name: maximum-p95-seconds
+        value: "10.0"
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 1Gi
+  templates:
+    - name: validate
+      dag:
+        tasks:
+          - name: prepare-versioned-data
+            template: prepare-versioned-data
+          - name: load-test-and-enforce-slo
+            dependencies: [prepare-versioned-data]
+            template: load-test-and-enforce-slo
+    - name: prepare-versioned-data
+      container:
+        image: mlforge/label-release:0.1.2
+        imagePullPolicy: IfNotPresent
+        command: [sh, -ec]
+        args:
+          - |
+            git clone --depth 1 --branch main "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPOSITORY}.git" /work/repository
+            cd /work/repository
+            dvc remote modify --local minio endpointurl "$DVC_ENDPOINT_URL"
+            dvc pull "$DATA_RELEASE_PATH"
+            test -f "${DATA_RELEASE_PATH%.dvc}/annotations.json"
+        env:
+          - name: REPOSITORY
+            value: "{{workflow.parameters.repository}}"
+          - name: DATA_RELEASE_PATH
+            value: "{{workflow.parameters.data-release-path}}"
+          - name: DVC_ENDPOINT_URL
+            value: http://minio.ml-platform.svc.cluster.local:9000
+          - name: GITHUB_TOKEN
+            valueFrom: {secretKeyRef: {name: github-bot, key: token}}
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: minio-credentials, key: root-user}}
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom: {secretKeyRef: {name: minio-credentials, key: root-password}}
+        volumeMounts: [{name: work, mountPath: /work}]
+    - name: load-test-and-enforce-slo
+      container:
+        image: mlforge/canary-gate:0.1.1
+        imagePullPolicy: IfNotPresent
+        command: [python, -m, mlforge_platform.canary_load_gate]
+        args:
+          - --release-dir
+          - "/work/repository/{{workflow.parameters.data-release-path}}"
+          - --endpoint
+          - "{{workflow.parameters.endpoint}}"
+          - --requests
+          - "{{workflow.parameters.requests}}"
+          - --minimum-success-rate
+          - "{{workflow.parameters.minimum-success-rate}}"
+          - --maximum-p95-seconds
+          - "{{workflow.parameters.maximum-p95-seconds}}"
+          - --result-path
+          - /work/canary-result.json
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: http://mlflow.ml-platform.svc.cluster.local:5000
+          - name: MLFLOW_S3_ENDPOINT_URL
+            value: http://minio.ml-platform.svc.cluster.local:9000
+          - name: S3_ENDPOINT_URL
+            value: http://minio.ml-platform.svc.cluster.local:9000
+          - name: AWS_DEFAULT_REGION
+            value: us-east-1
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: minio-official-credentials, key: rootUser}}
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom: {secretKeyRef: {name: minio-official-credentials, key: rootPassword}}
+        resources:
+          requests: {cpu: 500m, memory: 1Gi}
+          limits: {cpu: "2", memory: 3Gi}
+        volumeMounts: [{name: work, mountPath: /work}]
