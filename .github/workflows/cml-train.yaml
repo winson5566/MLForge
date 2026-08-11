@@ -1,20 +1,7 @@
 name: CML data validation
 
 on:
-  pull_request:
-    paths:
-      - "data/**"
-      - "src/**"
-      - "platform/**"
-      - ".github/workflows/**"
-      - ".dvc/**"
-      - "dvc.yaml"
-  workflow_dispatch:
-    inputs:
-      training_manifest:
-        description: "Project Kubernetes Job manifest, for example projects/road-signs/training-job.yaml"
-        required: true
-        type: string
+  workflow_call:
 
 permissions:
   contents: read
@@ -49,12 +36,3 @@ jobs:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cml comment create report.md
-      - name: Submit full training to Kubernetes
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          TRAINING_MANIFEST: ${{ inputs.training_manifest }}
-        run: |
-          test -f "$TRAINING_MANIFEST"
-          job_name=$(kubectl --context k3d-workload -n ml-platform apply -f "$TRAINING_MANIFEST" -o name | sed 's#job.batch/##')
-          kubectl --context k3d-workload -n ml-platform wait --for=condition=complete "job/$job_name" --timeout=2h
-          kubectl --context k3d-workload -n ml-platform logs "job/$job_name"

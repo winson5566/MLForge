@@ -1,16 +1,7 @@
 name: Train MLflow Candidate
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "data/releases/**"
-  workflow_dispatch:
-    inputs:
-      data_release_path:
-        description: "DVC pointer path, for example data/releases/project-1/<release-id>.dvc"
-        required: true
-        type: string
+  workflow_call:
 
 permissions:
   contents: read
@@ -24,18 +15,12 @@ jobs:
           fetch-depth: 2
       - name: Select the published data release
         id: release
-        env:
-          DISPATCH_PATH: ${{ inputs.data_release_path }}
         run: |
-          if [ -n "$DISPATCH_PATH" ]; then
-            path="$DISPATCH_PATH"
-          else
-            paths=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" \
-              | grep -E '^data/releases/project-[0-9]+/.+\.dvc$' || true)
-            count=$(printf '%s\n' "$paths" | sed '/^$/d' | wc -l | tr -d ' ')
-            test "$count" = 1
-            path="$paths"
-          fi
+          paths=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" \
+            | grep -E '^data/releases/project-[0-9]+/.+\.dvc$' || true)
+          count=$(printf '%s\n' "$paths" | sed '/^$/d' | wc -l | tr -d ' ')
+          test "$count" = 1
+          path="$paths"
           test -n "$path"
           project_id=$(printf '%s' "$path" | sed -E 's#^data/releases/project-([0-9]+)/.*#\1#')
           release_id=$(basename "$path" .dvc)
