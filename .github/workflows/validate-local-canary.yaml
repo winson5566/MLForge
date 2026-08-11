@@ -1,0 +1,70 @@
+name: Validate local Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_release_path:
+        description: "DVC pointer for the immutable data release"
+        required: true
+        default: data/releases/project-1/febcf81e6dd06fd8.dvc
+        type: string
+      requests:
+        description: "Number of real inference requests"
+        required: true
+        default: "8"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate-canary:
+    environment: model-staging
+    runs-on: [self-hosted, mlforge]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Submit Canary SLO gate to Argo
+        id: argo
+        env:
+          DATA_RELEASE_PATH: ${{ inputs.data_release_path }}
+          REQUESTS: ${{ inputs.requests }}
+        run: |
+          workflow=$(cat <<EOF | kubectl --context k3d-workload -n ml-platform create -f - -o name
+          apiVersion: argoproj.io/v1alpha1
+          kind: Workflow
+          metadata:
+            generateName: validate-yolo-canary-
+            labels:
+              app.kubernetes.io/part-of: mlforge
+              mlforge.ai/trigger: approved-canary-validation
+          spec:
+            workflowTemplateRef:
+              name: validate-yolo-local-canary
+            arguments:
+              parameters:
+                - name: repository
+                  value: ${{ github.repository }}
+                - name: data-release-path
+                  value: "$DATA_RELEASE_PATH"
+                - name: requests
+                  value: "$REQUESTS"
+          EOF
+          )
+          printf 'workflow=%s\n' "$workflow" >> "$GITHUB_OUTPUT"
+      - name: Wait for Canary SLO result
+        env:
+          WORKFLOW: ${{ steps.argo.outputs.workflow }}
+        run: |
+          name=${WORKFLOW#workflow.argoproj.io/}
+          kubectl --context k3d-workload -n ml-platform wait --for=jsonpath='{.status.phase}'=Succeeded "workflow/$name" --timeout=15m
+      - name: Publish verification summary
+        env:
+          WORKFLOW: ${{ steps.argo.outputs.workflow }}
+        run: |
+          {
+            echo '## Local Canary SLO gate passed'
+            echo
+            echo "- Argo audit workflow: \`$WORKFLOW\`"
+            echo '- Evidence: MLflow experiment `label-studio-canary-validation`.'
+            echo '- Next manual decision: retain this demo Canary or roll its alias back.'
+          } >> "$GITHUB_STEP_SUMMARY"
