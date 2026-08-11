@@ -18,6 +18,8 @@ spec:
       - name: metric-name
         value: validation_accuracy
       - name: minimum
+      - name: target-alias
+        value: champion
   templates:
     - name: promote
       container:
@@ -34,7 +36,7 @@ spec:
           - --minimum
           - "{{workflow.parameters.minimum}}"
           - --alias
-          - champion
+          - "{{workflow.parameters.target-alias}}"
         env:
           - name: MLFLOW_TRACKING_URI
             value: http://mlflow.ml-platform.svc.cluster.local:5000

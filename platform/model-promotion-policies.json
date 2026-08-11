@@ -1,0 +1,16 @@
+{
+  "local-demo": {
+    "description": "Local k3d demonstration only; never use for production deployment.",
+    "github_environment": "model-staging",
+    "metric_name": "validation_map50",
+    "minimum": 0.25,
+    "target_alias": "demo-champion"
+  },
+  "production": {
+    "description": "Production policy. Requires the production GitHub environment approval.",
+    "github_environment": "model-production",
+    "metric_name": "validation_map50",
+    "minimum": 0.7,
+    "target_alias": "champion"
+  }
+}
