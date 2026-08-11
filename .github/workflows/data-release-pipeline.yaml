@@ -1,0 +1,30 @@
+name: Data release pipeline
+
+on:
+  pull_request:
+    paths:
+      - "data/**"
+      - "src/**"
+      - "platform/**"
+      - ".github/workflows/**"
+      - ".dvc/**"
+      - "dvc.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "data/releases/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate-data-release:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/cml-train.yaml
+    secrets: inherit
+
+  train-candidate:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/train-candidate-on-data-release.yaml
+    secrets: inherit

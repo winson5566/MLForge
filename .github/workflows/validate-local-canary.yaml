@@ -1,7 +1,7 @@
 name: Validate local Canary
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       data_release_path:
         description: "DVC pointer for the immutable data release"
