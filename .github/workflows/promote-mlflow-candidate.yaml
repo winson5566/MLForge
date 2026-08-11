@@ -11,16 +11,14 @@ on:
         description: "Candidate version to promote"
         required: true
         type: string
-      metric_name:
-        description: "MLflow metric required for Champion, for example validation_map50"
+      policy:
+        description: "Versioned promotion policy (local-demo never writes the production champion alias)"
         required: true
-        default: "validation_map50"
-        type: string
-      minimum_metric:
-        description: "Minimum value of the selected metric required for Champion"
-        required: true
-        default: "0.70"
-        type: string
+        default: local-demo
+        type: choice
+        options:
+          - local-demo
+          - production
 
 permissions:
   contents: read
@@ -29,17 +27,33 @@ jobs:
   approve-and-promote:
     # Configure required reviewers for this environment in GitHub repository
     # settings. The deployment job will pause there before it can mutate MLflow.
-    environment: model-production
+    environment: ${{ inputs.policy == 'production' && 'model-production' || 'model-staging' }}
     runs-on: [self-hosted, mlforge]
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve the immutable promotion policy
+        id: policy
+        env:
+          POLICY_NAME: ${{ inputs.policy }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          policies = json.load(open("platform/model-promotion-policies.json"))
+          policy = policies[os.environ["POLICY_NAME"]]
+          print(f"metric_name={policy['metric_name']}")
+          print(f"minimum={policy['minimum']}")
+          print(f"target_alias={policy['target_alias']}")
+          PY
       - name: Submit promotion gate to Argo
         id: argo
         env:
           MODEL_NAME: ${{ inputs.model_name }}
           MODEL_VERSION: ${{ inputs.model_version }}
-          METRIC_NAME: ${{ inputs.metric_name }}
-          MINIMUM: ${{ inputs.minimum_metric }}
+          METRIC_NAME: ${{ steps.policy.outputs.metric_name }}
+          MINIMUM: ${{ steps.policy.outputs.minimum }}
+          TARGET_ALIAS: ${{ steps.policy.outputs.target_alias }}
         run: |
           workflow=$(cat <<EOF | kubectl --context k3d-workload -n ml-platform create -f - -o name
           apiVersion: argoproj.io/v1alpha1
@@ -59,9 +73,11 @@ jobs:
                 - name: model-version
                   value: "$MODEL_VERSION"
                 - name: metric-name
-                  value: $METRIC_NAME
+                  value: "$METRIC_NAME"
                 - name: minimum
                   value: "$MINIMUM"
+                - name: target-alias
+                  value: "$TARGET_ALIAS"
           EOF
           )
           printf 'workflow=%s\n' "$workflow" >> "$GITHUB_OUTPUT"
@@ -76,12 +92,16 @@ jobs:
           WORKFLOW: ${{ steps.argo.outputs.workflow }}
           MODEL_NAME: ${{ inputs.model_name }}
           MODEL_VERSION: ${{ inputs.model_version }}
+          POLICY: ${{ inputs.policy }}
+          TARGET_ALIAS: ${{ steps.policy.outputs.target_alias }}
         run: |
           {
-            echo '## Candidate promoted to Champion'
+            echo '## Candidate promoted by governed policy'
             echo
             echo "- Model: \`$MODEL_NAME\`"
             echo "- Version: \`$MODEL_VERSION\`"
+            echo "- Policy: \`$POLICY\`"
+            echo "- Target alias: \`$TARGET_ALIAS\`"
             echo "- Argo audit workflow: \`$WORKFLOW\`"
-            echo '- Next controlled action: deploy this Champion to Triton Canary.'
+            echo '- Next controlled action: deploy this promoted alias to the local Canary service.'
           } >> "$GITHUB_STEP_SUMMARY"
