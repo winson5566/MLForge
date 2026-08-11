@@ -1,0 +1,79 @@
+name: Promote MLflow Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: "Registered MLflow model name"
+        required: true
+        type: string
+      model_version:
+        description: "Candidate version to promote"
+        required: true
+        type: string
+      minimum_accuracy:
+        description: "Minimum validation_accuracy required for Champion"
+        required: true
+        default: "0.70"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  approve-and-promote:
+    # Configure required reviewers for this environment in GitHub repository
+    # settings. The deployment job will pause there before it can mutate MLflow.
+    environment: model-production
+    runs-on: [self-hosted, mlforge]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Submit promotion gate to Argo
+        id: argo
+        env:
+          MODEL_NAME: ${{ inputs.model_name }}
+          MODEL_VERSION: ${{ inputs.model_version }}
+          MINIMUM: ${{ inputs.minimum_accuracy }}
+        run: |
+          workflow=$(cat <<EOF | kubectl --context k3d-workload -n ml-platform create -f - -o name
+          apiVersion: argoproj.io/v1alpha1
+          kind: Workflow
+          metadata:
+            generateName: promote-candidate-
+            labels:
+              app.kubernetes.io/part-of: mlforge
+              mlforge.ai/trigger: approved-promotion
+          spec:
+            workflowTemplateRef:
+              name: promote-mlflow-candidate
+            arguments:
+              parameters:
+                - name: model-name
+                  value: $MODEL_NAME
+                - name: model-version
+                  value: "$MODEL_VERSION"
+                - name: minimum
+                  value: "$MINIMUM"
+          EOF
+          )
+          printf 'workflow=%s\n' "$workflow" >> "$GITHUB_OUTPUT"
+      - name: Wait for the quality gate
+        env:
+          WORKFLOW: ${{ steps.argo.outputs.workflow }}
+        run: |
+          name=${WORKFLOW#workflow.argoproj.io/}
+          kubectl --context k3d-workload -n ml-platform wait --for=jsonpath='{.status.phase}'=Succeeded "workflow/$name" --timeout=10m
+      - name: Publish promotion summary
+        env:
+          WORKFLOW: ${{ steps.argo.outputs.workflow }}
+          MODEL_NAME: ${{ inputs.model_name }}
+          MODEL_VERSION: ${{ inputs.model_version }}
+        run: |
+          {
+            echo '## Candidate promoted to Champion'
+            echo
+            echo "- Model: \`$MODEL_NAME\`"
+            echo "- Version: \`$MODEL_VERSION\`"
+            echo "- Argo audit workflow: \`$WORKFLOW\`"
+            echo '- Next controlled action: deploy this Champion to Triton Canary.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: promote-mlflow-candidate
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+    app.kubernetes.io/component: model-governance
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: promote
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  arguments:
+    parameters:
+      - name: model-name
+      - name: model-version
+      - name: metric-name
+        value: validation_accuracy
+      - name: minimum
+  templates:
+    - name: promote
+      container:
+        image: mlforge/annotation-trainer:0.1.3
+        imagePullPolicy: IfNotPresent
+        command: [python, -m, mlforge_platform.gate]
+        args:
+          - --model-name
+          - "{{workflow.parameters.model-name}}"
+          - --version
+          - "{{workflow.parameters.model-version}}"
+          - --metric-name
+          - "{{workflow.parameters.metric-name}}"
+          - --minimum
+          - "{{workflow.parameters.minimum}}"
+          - --alias
+          - champion
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: http://mlflow.ml-platform.svc.cluster.local:5000
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: 500m, memory: 768Mi}

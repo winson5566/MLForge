@@ -21,6 +21,13 @@ Candidate** GitHub workflow. It submits the `train-mlflow-candidate` Argo
 WorkflowTemplate, which performs DVC data preparation, PyTorch training, and
 MLflow Candidate registration inside the workload cluster.
 
+Candidate promotion is a separate, manually initiated **Promote MLflow
+Candidate** workflow. It targets the `model-production` GitHub Environment;
+configure required reviewers there. The Argo promotion gate reads the metric
+from the Candidate's MLflow run itself and only assigns the `champion` alias
+when it meets the declared threshold. A rejected Candidate must never reach
+the serving deployment.
+
 For a team deployment, replace `@winson5566` in `CODEOWNERS` with an algorithm
 engineering team and use a GitHub App, not a personal access token, for the
 `github-bot` Kubernetes secret.
