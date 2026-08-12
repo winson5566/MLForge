@@ -11,6 +11,10 @@ on:
         description: "Candidate version to promote"
         required: true
         type: string
+      data_release_path:
+        description: "Immutable DVC pointer used to validate the promoted model Canary"
+        required: true
+        type: string
       policy:
         description: "Versioned promotion policy (local-demo never writes the production champion alias)"
         required: true
@@ -87,6 +91,39 @@ jobs:
         run: |
           name=${WORKFLOW#workflow.argoproj.io/}
           kubectl --context k3d-workload -n ml-platform wait --for=jsonpath='{.status.phase}'=Succeeded "workflow/$name" --timeout=10m
+      - name: Submit Canary SLO gate
+        id: canary
+        env:
+          DATA_RELEASE_PATH: ${{ inputs.data_release_path }}
+        run: |
+          workflow=$(cat <<EOF | kubectl --context k3d-workload -n ml-platform create -f - -o name
+          apiVersion: argoproj.io/v1alpha1
+          kind: Workflow
+          metadata:
+            generateName: validate-yolo-canary-
+            labels:
+              app.kubernetes.io/part-of: mlforge
+              mlforge.ai/trigger: approved-canary-validation
+          spec:
+            workflowTemplateRef:
+              name: validate-yolo-local-canary
+            arguments:
+              parameters:
+                - name: repository
+                  value: ${{ github.repository }}
+                - name: data-release-path
+                  value: "$DATA_RELEASE_PATH"
+                - name: requests
+                  value: "8"
+          EOF
+          )
+          printf 'workflow=%s\n' "$workflow" >> "$GITHUB_OUTPUT"
+      - name: Wait for Canary SLO result
+        env:
+          WORKFLOW: ${{ steps.canary.outputs.workflow }}
+        run: |
+          name=${WORKFLOW#workflow.argoproj.io/}
+          kubectl --context k3d-workload -n ml-platform wait --for=jsonpath='{.status.phase}'=Succeeded "workflow/$name" --timeout=15m
       - name: Publish promotion summary
         env:
           WORKFLOW: ${{ steps.argo.outputs.workflow }}
@@ -103,5 +140,6 @@ jobs:
             echo "- Policy: \`$POLICY\`"
             echo "- Target alias: \`$TARGET_ALIAS\`"
             echo "- Argo audit workflow: \`$WORKFLOW\`"
-            echo '- Next controlled action: deploy this promoted alias to the local Canary service.'
+            echo "- Canary SLO workflow: \`${{ steps.canary.outputs.workflow }}\`"
+            echo '- The promoted model passed the local Canary gate.'
           } >> "$GITHUB_STEP_SUMMARY"
