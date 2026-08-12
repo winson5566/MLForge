@@ -30,14 +30,45 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}/src
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The report must diff the immutable PR head against its base,
+          # rather than pick an arbitrary historical release on disk.
+          fetch-depth: 0
       - uses: iterative/setup-cml@v2
-      - name: Fetch the versioned data
-        run: dvc pull
-      - name: Summarize the candidate data release
+      - name: Resolve the data release under review
+        id: release
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          manifest=$(find data/releases -name manifest.json -type f -print -quit 2>/dev/null || true)
-          if [ -n "$manifest" ]; then
-            python3 -m mlforge_platform.data_release_report --manifest "$manifest" --output report.md
+          paths=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+            | grep -E '^data/releases/project-[0-9]+/.+\.dvc$' || true)
+          count=$(printf '%s\n' "$paths" | sed '/^$/d' | wc -l | tr -d ' ')
+          if [ "$count" = 0 ]; then
+            echo 'has_release=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "$count" = 1
+          path="$paths"
+          printf 'has_release=true\ndvc_path=%s\nmanifest_path=%s\n' \
+            "$path" "${path%.dvc}/manifest.json" >> "$GITHUB_OUTPUT"
+      - name: Fetch the versioned data
+        env:
+          DVC_PATH: ${{ steps.release.outputs.dvc_path }}
+        run: |
+          if [ -n "$DVC_PATH" ]; then
+            dvc pull "$DVC_PATH"
+          else
+            dvc pull
+          fi
+      - name: Summarize the candidate data release
+        env:
+          HAS_RELEASE: ${{ steps.release.outputs.has_release }}
+          MANIFEST: ${{ steps.release.outputs.manifest_path }}
+        run: |
+          if [ "$HAS_RELEASE" = true ]; then
+            test -f "$MANIFEST"
+            python3 -m mlforge_platform.data_release_report --manifest "$MANIFEST" --output report.md
           else
             printf '## MLForge data-release review\n\n✅ DVC data is reachable. No release manifest is present in this PR.\n' > report.md
           fi
