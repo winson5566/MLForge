@@ -27,6 +27,7 @@ jobs:
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.DVC_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_S3_SECRET_ACCESS_KEY }}
+      PYTHONPATH: ${{ github.workspace }}/src
     steps:
       - uses: actions/checkout@v4
       - uses: iterative/setup-cml@v2
@@ -35,16 +36,11 @@ jobs:
       - name: Summarize the candidate data release
         run: |
           manifest=$(find data/releases -name manifest.json -type f -print -quit 2>/dev/null || true)
-          {
-            printf '## MLForge data validation\n\n'
-            if [ -n "$manifest" ]; then
-              printf 'Candidate manifest: `%s`\n\n```json\n' "$manifest"
-              python3 -m json.tool "$manifest"
-              printf '```\n'
-            else
-              printf 'No `data/releases/**/manifest.json` changed in this PR. DVC data is reachable and the repository data version was fetched successfully.\n'
-            fi
-          } > report.md
+          if [ -n "$manifest" ]; then
+            python3 -m mlforge_platform.data_release_report --manifest "$manifest" --output report.md
+          else
+            printf '## MLForge data-release review\n\n✅ DVC data is reachable. No release manifest is present in this PR.\n' > report.md
+          fi
       - name: Create a pull-request report
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
