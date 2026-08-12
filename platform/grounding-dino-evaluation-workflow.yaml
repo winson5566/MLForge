@@ -1,0 +1,87 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: evaluate-grounding-dino
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/part-of: mlforge
+    app.kubernetes.io/component: model-evaluation
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: evaluate
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  podGC:
+    strategy: OnWorkflowSuccess
+  volumeClaimGC:
+    strategy: OnWorkflowCompletion
+  arguments:
+    parameters:
+      - name: repository
+      - name: data-release-path
+      - name: git-sha
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 2Gi
+  templates:
+    - name: evaluate
+      dag:
+        tasks:
+          - name: prepare-versioned-data
+            template: prepare-versioned-data
+          - name: zero-shot-evaluate
+            dependencies: [prepare-versioned-data]
+            template: zero-shot-evaluate
+    - name: prepare-versioned-data
+      container:
+        image: mlforge/label-release:0.1.2
+        imagePullPolicy: IfNotPresent
+        command: [sh, -ec]
+        args:
+          - |
+            git clone --depth 1 --branch main "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPOSITORY}.git" /work/repository
+            cd /work/repository
+            dvc remote modify --local minio endpointurl "$DVC_ENDPOINT_URL"
+            dvc pull "$DATA_RELEASE_PATH"
+        env:
+          - {name: REPOSITORY, value: "{{workflow.parameters.repository}}"}
+          - {name: DATA_RELEASE_PATH, value: "{{workflow.parameters.data-release-path}}"}
+          - {name: DVC_ENDPOINT_URL, value: http://minio.ml-platform.svc.cluster.local:9000}
+          - name: GITHUB_TOKEN
+            valueFrom: {secretKeyRef: {name: github-bot, key: token}}
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: minio-credentials, key: root-user}}
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom: {secretKeyRef: {name: minio-credentials, key: root-password}}
+        volumeMounts: [{name: work, mountPath: /work}]
+    - name: zero-shot-evaluate
+      container:
+        image: mlforge/grounding-dino-evaluator:0.1.2
+        imagePullPolicy: IfNotPresent
+        command: [sh, -ec]
+        args:
+          - |
+            python -m mlforge_platform.evaluate_grounding_dino \
+              --release-dir "/work/repository/${DATA_RELEASE_PATH%.dvc}" \
+              --result-path /work/grounding-dino-result.json \
+              --git-sha "{{workflow.parameters.git-sha}}"
+        env:
+          - {name: DATA_RELEASE_PATH, value: "{{workflow.parameters.data-release-path}}"}
+          - {name: S3_ENDPOINT_URL, value: http://minio.ml-platform.svc.cluster.local:9000}
+          - {name: MLFLOW_TRACKING_URI, value: http://mlflow.ml-platform.svc.cluster.local:5000}
+          - {name: MLFLOW_S3_ENDPOINT_URL, value: http://minio.ml-platform.svc.cluster.local:9000}
+          - {name: AWS_DEFAULT_REGION, value: us-east-1}
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: minio-credentials, key: root-user}}
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom: {secretKeyRef: {name: minio-credentials, key: root-password}}
+        resources:
+          requests: {cpu: "1", memory: 2Gi}
+          limits: {cpu: "4", memory: 4Gi}
+        volumeMounts: [{name: work, mountPath: /work}]
