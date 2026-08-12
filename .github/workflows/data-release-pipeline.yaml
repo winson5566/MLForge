@@ -21,10 +21,91 @@ permissions:
 jobs:
   validate-data-release:
     if: github.event_name == 'pull_request'
-    uses: ./.github/workflows/cml-train.yaml
-    secrets: inherit
+    # This runner must be installed on the Mac that hosts K3d. GitHub-hosted
+    # runners cannot reach the private MinIO and Kubernetes endpoints.
+    runs-on: [self-hosted, mlforge]
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.DVC_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_S3_SECRET_ACCESS_KEY }}
+      PYTHONPATH: ${{ github.workspace }}/src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: iterative/setup-cml@v2
+      - name: Fetch the versioned data
+        run: dvc pull
+      - name: Summarize the candidate data release
+        run: |
+          manifest=$(find data/releases -name manifest.json -type f -print -quit 2>/dev/null || true)
+          if [ -n "$manifest" ]; then
+            python3 -m mlforge_platform.data_release_report --manifest "$manifest" --output report.md
+          else
+            printf '## MLForge data-release review\n\n✅ DVC data is reachable. No release manifest is present in this PR.\n' > report.md
+          fi
+      - name: Create a pull-request report
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cml comment create report.md
 
   train-candidate:
     if: github.event_name == 'push'
-    uses: ./.github/workflows/train-candidate-on-data-release.yaml
-    secrets: inherit
+    runs-on: [self-hosted, mlforge]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Select the published data release
+        id: release
+        run: |
+          paths=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" \
+            | grep -E '^data/releases/project-[0-9]+/.+\.dvc$' || true)
+          count=$(printf '%s\n' "$paths" | sed '/^$/d' | wc -l | tr -d ' ')
+          test "$count" = 1
+          path="$paths"
+          project_id=$(printf '%s' "$path" | sed -E 's#^data/releases/project-([0-9]+)/.*#\1#')
+          release_id=$(basename "$path" .dvc)
+          printf 'path=%s\nproject_id=%s\nrelease_id=%s\n' "$path" "$project_id" "$release_id" >> "$GITHUB_OUTPUT"
+      - name: Submit Argo training workflow
+        id: argo
+        env:
+          DATA_RELEASE_PATH: ${{ steps.release.outputs.path }}
+          PROJECT_ID: ${{ steps.release.outputs.project_id }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+        run: |
+          workflow=$(cat <<EOF | kubectl --context k3d-workload -n ml-platform create -f - -o name
+          apiVersion: argoproj.io/v1alpha1
+          kind: Workflow
+          metadata:
+            generateName: train-candidate-
+            labels:
+              app.kubernetes.io/part-of: mlforge
+              mlforge.ai/trigger: data-release-merge
+          spec:
+            workflowTemplateRef:
+              name: train-mlflow-candidate
+            arguments:
+              parameters:
+                - name: repository
+                  value: ${{ github.repository }}
+                - name: data-release-path
+                  value: $DATA_RELEASE_PATH
+                - name: release-id
+                  value: $RELEASE_ID
+                - name: project-id
+                  value: "$PROJECT_ID"
+                - name: git-sha
+                  value: ${{ github.sha }}
+          EOF
+          )
+          printf 'workflow=%s\n' "$workflow" >> "$GITHUB_OUTPUT"
+      - name: Publish submission summary
+        env:
+          WORKFLOW: ${{ steps.argo.outputs.workflow }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+        run: |
+          {
+            echo '## MLflow Candidate training submitted'
+            echo
+            echo "- Data release: \`$RELEASE_ID\`"
+            echo "- Argo workflow: \`$WORKFLOW\`"
+            echo '- Follow the Argo workflow; successful completion registers the `candidate` model alias in MLflow.'
+          } >> "$GITHUB_STEP_SUMMARY"
